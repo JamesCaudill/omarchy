@@ -432,14 +432,14 @@ PanelWindow {
     // the pointer never sees itself held; it's told, for its press feedback,
     // the way the bar's own press handler tells it.
     property var heldTarget: null
-    function hold(target) {
-      if (heldTarget && heldTarget !== target && "held" in heldTarget) heldTarget.held = false
-      heldTarget = target && "held" in target ? target : null
-      if (heldTarget) heldTarget.held = true
+    function hold(target, button) {
+      if (heldTarget && heldTarget !== target && "heldButtons" in heldTarget) heldTarget.heldButtons = Qt.NoButton
+      heldTarget = target && "heldButtons" in target ? target : null
+      if (heldTarget) heldTarget.heldButtons = button
     }
 
     onPressed: function(mouse) {
-      hold(root.focusPrimed && inBarRegion(mouse.x, mouse.y) ? pressTargetAt(mouse.x, mouse.y) : null)
+      hold(root.focusPrimed && inBarRegion(mouse.x, mouse.y) ? pressTargetAt(mouse.x, mouse.y) : null, mouse.button)
     }
     onReleased: hold(null)
     onCanceled: hold(null)
