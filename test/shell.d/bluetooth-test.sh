@@ -94,13 +94,102 @@ assertDeepEqual(arrayLikeLists.discovered.map(bluetooth.deviceLabel), ['Gamepad'
 
 assertDeepEqual(
   bluetooth.deviceRow({ name: 'Deadbeef', address: '1', connected: false }),
-  { address: '1', name: 'Deadbeef', deviceName: '', connected: false, state: -1, batteryAvailable: false, battery: 0, pairing: false },
+  { address: '1', name: 'Deadbeef', deviceName: '', connected: false, state: -1, batteryAvailable: false, battery: 0, percentage: null, charge: '', pairing: false },
   'bluetooth projects device rows with primitives only'
 )
 assertEqual(
   bluetooth.deviceLabel(bluetooth.deviceRow({ name: 'Generic', deviceName: 'MX Master 3S', address: '2', connected: true })),
   'MX Master 3S',
   'bluetooth keeps deviceName in row projections so labels survive QObject-free rows'
+)
+
+assertEqual(bluetooth.upowerAddress('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF'), 'aabbccddeeff', 'bluetooth reads a BlueZ path as a battery address')
+assertEqual(bluetooth.upowerAddress('hid-aa:bb:cc:dd:ee:ff-battery'), 'aabbccddeeff', 'bluetooth reads a colon address out of a HID supply')
+assertEqual(bluetooth.upowerAddress('hidpp_battery_0'), '', 'bluetooth leaves a HID++ supply with no address unmatched')
+
+// James's pair: the trackpad is connected over Bluetooth and UPower knows the
+// BlueZ path; the keyboard is on a cable, so BlueZ does not list it as
+// connected. The icon has to show both, and UPower's level wins over a stale
+// BlueZ percentage because only UPower knows charging.
+const trackpad = { name: 'Magic Trackpad', address: 'AA:BB:CC:DD:EE:01', connected: true, batteryAvailable: true, battery: 0.1 }
+const pairedKeyboard = { name: 'Magic Keyboard', address: 'AA:BB:CC:DD:EE:02', connected: false, paired: true }
+const readouts = bluetooth.batteryReadouts(
+  [trackpad, pairedKeyboard, { name: 'WH-1000XM5', address: 'AA:BB:CC:DD:EE:03', connected: true, batteryAvailable: true, battery: 0.8 }],
+  [
+    { type: 14, model: 'Magic Trackpad', percentage: 0.39, state: 2, nativePath: '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01', powerSupply: false },
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hidpp_battery_0', powerSupply: false },
+    { type: 2, model: 'Internal', percentage: 0.77, state: 2, nativePath: 'BAT0', powerSupply: true, isLaptopBattery: true },
+    { type: 1, model: 'AC', percentage: 0, state: 0, nativePath: 'AC', powerSupply: true },
+    { type: 6, model: 'Ghost', percentage: 0, state: 0, nativePath: 'hidpp_battery_1', powerSupply: false }
+  ]
+)
+assertDeepEqual(readouts.map((entry) => [entry.name, entry.percentage, entry.charge, entry.matched]), [
+  ['Magic Keyboard', 22, 'charging', false],
+  ['Magic Trackpad', 39, 'discharging', true],
+  ['WH-1000XM5', 80, '', true]
+], 'bluetooth lists UPower peripheral batteries, prefers them over BlueZ, and skips the laptop supply')
+assertDeepEqual(bluetooth.headlineBattery(readouts), readouts[0], 'bluetooth headlines the lowest peripheral battery')
+assertDeepEqual(bluetooth.unmatchedBatteries(readouts).map((entry) => entry.name), ['Magic Keyboard'], 'bluetooth keeps a cabled keyboard out of the BlueZ device rows')
+assertEqual(
+  bluetooth.batteryForAddress(readouts, 'aa:bb:cc:dd:ee:01').percentage,
+  39,
+  'bluetooth attaches the UPower reading to the connected device'
+)
+assertDeepEqual(
+  bluetooth.deviceRow(trackpad, bluetooth.batteryForAddress(readouts, trackpad.address)),
+  { address: 'AA:BB:CC:DD:EE:01', name: 'Magic Trackpad', deviceName: '', connected: true, state: -1, batteryAvailable: true, battery: 0.39, percentage: 39, charge: 'discharging', pairing: false },
+  'bluetooth rows take the UPower level and charging state'
+)
+
+// Same keyboard connected over Bluetooth, with UPower publishing both a BlueZ
+// object and a HID object. One row, and the HID object is not a second device.
+const keyboardReadouts = bluetooth.batteryReadouts(
+  [{ name: 'Magic Keyboard', deviceName: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
+  [
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 0, nativePath: 'hidpp_battery_0' },
+    { type: 6, model: 'other', percentage: 0.22, state: 1, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' }
+  ]
+)
+assertDeepEqual(keyboardReadouts.map((entry) => [entry.name, entry.percentage, entry.charge, entry.matched]), [
+  ['Magic Keyboard', 22, 'charging', true]
+], 'bluetooth folds a HID reading and a BlueZ reading of one keyboard into one row')
+
+const twinCharge = bluetooth.batteryReadouts(
+  [{ name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
+  [
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hidpp_battery_0' },
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 0, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' }
+  ]
+)
+assertEqual(twinCharge.length, 1, 'bluetooth still folds the keyboard when only the HID copy knows it is charging')
+assertEqual(twinCharge[0].charge, 'charging', 'bluetooth keeps the charging state from the HID copy')
+
+// Two supplies with the same model and no address must not be pinned onto one
+// connected device. An empty battery that says it is discharging still shows.
+const ambiguous = bluetooth.batteryReadouts(
+  [{ name: 'MX Master', address: '01:02:03:04:05:06', connected: true }],
+  [
+    { type: 5, model: 'MX Master', percentage: 0.5, state: 2, nativePath: 'hidpp_battery_2' },
+    { type: 5, model: 'MX Master', percentage: 0.4, state: 2, nativePath: 'hidpp_battery_3' },
+    { type: 6, model: 'Dead', percentage: 0, state: 2, nativePath: 'hidpp_battery_4' }
+  ]
+)
+assertDeepEqual(ambiguous.map((entry) => [entry.name, entry.percentage, entry.matched]), [
+  ['Dead', 0, false],
+  ['MX Master', 40, false],
+  ['MX Master', 50, false]
+], 'bluetooth does not guess when two supplies share a name, and keeps an empty discharging battery')
+
+const chargingWord = (key, english) => key === 'power.charging' ? 'Oplader' : english
+assertEqual(
+  bluetooth.formatBatteryStatus({ percentage: 22, charge: 'charging' }, chargingWord, (n) => String(n)),
+  '22% · Oplader',
+  'bluetooth battery status uses the charging translation'
+)
+assertEqual(
+  bluetooth.formatBatteryTooltip(readouts, (key, english) => english, (n) => String(n)),
+  'Magic Keyboard 22% · Charging\nMagic Trackpad 39% · Discharging\nWH-1000XM5 80%',
+  'bluetooth tooltip names every peripheral battery'
 )
 
 assertDeepEqual(
