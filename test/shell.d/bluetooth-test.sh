@@ -143,8 +143,8 @@ assertDeepEqual(
   'bluetooth rows take the UPower level and charging state'
 )
 
-// Same keyboard connected over Bluetooth, with UPower publishing both a BlueZ
-// object and a HID object. One row, and the HID object is not a second device.
+// A HID supply with no address in its path or serial is a different battery,
+// even when the model and the percentage match the connected keyboard.
 const keyboardReadouts = bluetooth.batteryReadouts(
   [{ name: 'Magic Keyboard', deviceName: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
   [
@@ -153,35 +153,38 @@ const keyboardReadouts = bluetooth.batteryReadouts(
   ]
 )
 assertDeepEqual(keyboardReadouts.map((entry) => [entry.name, entry.percentage, entry.charge, entry.matched]), [
-  ['Magic Keyboard', 22, 'charging', true]
-], 'bluetooth folds a HID reading and a BlueZ reading of one keyboard into one row')
+  ['Magic Keyboard', 22, 'charging', true],
+  ['Magic Keyboard', 22, '', false]
+], 'bluetooth leaves an address-less HID supply as its own row')
 
-const twinCharge = bluetooth.batteryReadouts(
+// The kernel names a Bluetooth HID supply hid-<bdaddr>-battery-<report>.
+// UPower's Serial can carry that address even when the native path does not
+// parse as a MAC. That twin folds, and its charging reading wins.
+const identityTwin = bluetooth.batteryReadouts(
   [{ name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
   [
-    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hidpp_battery_0' },
-    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 0, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' }
+    { type: 6, model: 'other', percentage: 0.4, state: 2, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' },
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hidpp_battery_0', serial: '112233445566' }
   ]
 )
-assertEqual(twinCharge.length, 1, 'bluetooth still folds the keyboard when only the HID copy knows it is charging')
-assertEqual(twinCharge[0].charge, 'charging', 'bluetooth keeps the charging state from the HID copy')
+assertEqual(identityTwin.length, 1, 'bluetooth folds a supply whose serial is the Bluetooth address')
+assertEqual(identityTwin[0].charge, 'charging', 'bluetooth keeps the charging state from the identity-matched twin')
+assertEqual(identityTwin[0].percentage, 22, 'bluetooth keeps the percentage from the charging twin')
 
-// Two connected keyboards of one model, and a cabled keyboard at the same
-// percentage. The cable supply is not proof of either Bluetooth keyboard.
+// One connected keyboard and a cabled keyboard of the same model at the same
+// percentage. The cable path is the USB serial from the live machine, and it
+// does not contain the radio address.
 const sameModelKeyboards = bluetooth.batteryReadouts(
-  [
-    { name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true },
-    { name: 'Magic Keyboard', address: 'AA:BB:CC:DD:EE:10', connected: true }
-  ],
+  [{ name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
   [
     { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 2, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' },
-    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hid-CABLESERIAL-battery-144' }
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hid-F0T5474067XG9KPAV-battery-144', serial: 'F0T5474067XG9KPAV' }
   ]
 )
 assertDeepEqual(sameModelKeyboards.map((entry) => [entry.name, entry.percentage, entry.charge, entry.matched]), [
   ['Magic Keyboard', 22, 'discharging', true],
   ['Magic Keyboard', 22, 'charging', false]
-], 'bluetooth keeps two same-model keyboards at the same percentage as two rows')
+], 'bluetooth keeps a cabled keyboard of the same model and percentage as its own row')
 
 // BlueZ and HID both carry this address. The discharging copy is listed
 // first; the charging copy, and its percentage, are the ones that remain.
@@ -272,15 +275,15 @@ assertEqual(jamesObjectPath[0].matched, true, 'bluetooth still attaches the trac
 assertEqual(jamesObjectPath[0].name, 'James Caudill\u2019s Trackpad', 'bluetooth keeps the BlueZ alias on the object-path match')
 assertEqual(jamesObjectPath[1].matched, false, 'bluetooth does not treat the keyboard serial as the trackpad address')
 
-// The BlueZ device name is often the short product name, while UPower's model
-// keeps the vendor. That still attaches when the supply has no address in it.
+// A vendor-prefixed model is not an identity. With no address in the path or
+// serial, the supply stays its own row instead of attaching to the device.
 const productName = bluetooth.batteryReadouts(
   [{ name: 'James Caudill\u2019s Trackpad', deviceName: 'Magic Trackpad', address: '11:22:33:44:55:66', connected: true, batteryAvailable: false }],
   [{ type: 14, model: 'Apple Inc. Magic Trackpad', percentage: 0.39, state: 2, nativePath: 'hidpp_battery_9', powerSupply: false }]
 )
 assertDeepEqual(productName.map((entry) => [entry.name, entry.percentage, entry.matched]), [
-  ['Magic Trackpad', 39, true]
-], 'bluetooth matches a vendor-prefixed UPower model to the BlueZ product name')
+  ['Apple Inc. Magic Trackpad', 39, false]
+], 'bluetooth does not attach a supply that shares only a product name')
 
 assertDeepEqual(
   bluetooth.withPendingAction({ a: 'connecting' }, 'b', 'forgetting'),

@@ -212,32 +212,6 @@ function peripheralFrom(device) {
   }
 }
 
-// Exact, case-insensitive. Also "Magic Trackpad" inside "Apple Inc. Magic
-// Trackpad": the shorter side has to be more than one word, so a bare
-// "Trackpad" does not claim every trackpad UPower can see.
-function namesMatch(left, right) {
-  var a = String(left || "").trim().toLowerCase()
-  var b = String(right || "").trim().toLowerCase()
-  if (a === "" || b === "") return false
-  if (a === b) return true
-  var shorter = a.length <= b.length ? a : b
-  var longer = a.length <= b.length ? b : a
-  if (shorter.indexOf(" ") === -1) return false
-  return longer.length > shorter.length && longer.slice(-(shorter.length + 1)) === " " + shorter
-}
-
-function deviceNames(device) {
-  var names = []
-  function add(value) {
-    var text = String(value || "").trim()
-    if (text && names.indexOf(text) === -1) names.push(text)
-  }
-  add(deviceLabel(device))
-  add(device && device.name)
-  add(device && device.deviceName)
-  return names
-}
-
 // One UPower object per Bluetooth address. HID and BlueZ can both publish the
 // same device. Charging is the copy worth showing, and its percentage comes
 // with it. Otherwise a copy that knows its state wins over an unknown one.
@@ -263,12 +237,11 @@ function dedupePeripherals(list) {
   return result
 }
 
-// Connected Bluetooth devices first, enriched from UPower when the address or
-// (failing that) the model name matches. UPower is the reading that carries
-// charging state, and it is also how a keyboard on a cable reports — that
-// device is not connected in BlueZ, so it stays an unmatched row. BlueZ
-// Battery1 is the fallback for a device UPower has never seen; that interface
-// is empty unless bluetoothd was started with Experimental.
+// Connected Bluetooth devices first, enriched from UPower only when the
+// supply's native path or serial contains that device's address. A keyboard
+// on a cable has a USB serial there instead, so it stays an unmatched row.
+// BlueZ Battery1 is the fallback for a device UPower has never seen; that
+// interface is empty unless bluetoothd was started with Experimental.
 function batteryReadouts(bluetoothDevices, upowerDevices) {
   var peripherals = []
   var upower = toArray(upowerDevices)
@@ -301,63 +274,36 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
     return loose
   }
 
-  // Connected devices whose label is this supply's name. An address-less
-  // supply is only theirs when exactly one of them could own it.
-  function connectedNamed(name) {
-    var count = 0
-    for (var i = 0; i < connected.length; i++) {
-      var labels = deviceNames(connected[i])
-      for (var n = 0; n < labels.length; n++) {
-        if (!namesMatch(name, labels[n])) continue
-        count++
-        break
-      }
-    }
-    return count
+  // A second UPower object for this same radio. The kernel puts the
+  // Bluetooth address in the HID supply name; a cabled keyboard puts its
+  // USB serial there instead, which does not contain that address.
+  function carriesAddress(peripheral, want) {
+    if (!want) return false
+    var folded = normalizedAddress(String(peripheral.nativePath || "") + String(peripheral.serial || ""))
+    return folded.indexOf(want) !== -1
   }
 
-  function findByName(device) {
-    var labels = deviceNames(device)
-    var found = -1
+  function absorbIdentityTwin(entry) {
+    var want = entry.address
+    if (!want || want.length !== 12) return
     for (var index = 0; index < peripherals.length; index++) {
-      if (used[index] || peripherals[index].address) continue
-      var hit = false
-      for (var n = 0; n < labels.length; n++) {
-        if (namesMatch(peripherals[index].name, labels[n])) hit = true
+      if (used[index] || !carriesAddress(peripherals[index], want)) continue
+      var twin = peripherals[index]
+      if (twin.charge === "charging" && entry.charge !== "charging") {
+        entry.charge = twin.charge
+        entry.percentage = twin.percentage
+      } else if (!entry.charge && twin.charge) {
+        entry.charge = twin.charge
+        entry.percentage = twin.percentage
       }
-      if (!hit) continue
-      if (found !== -1) return -1
-      found = index
+      used[index] = true
     }
-    if (found < 0 || connectedNamed(peripherals[found].name) !== 1) return -1
-    return found
-  }
-
-  // A keyboard UPower publishes twice — once from BlueZ, once from HID with
-  // no address — can be one device. Fold that twin only when it is the only
-  // address-less supply of this name at this level and the only connected
-  // device of this name. A second keyboard of the same model stays its own
-  // read-only row, and does not lend its charging state to the other one.
-  function absorbNamelessTwin(entry) {
-    var hits = []
-    for (var index = 0; index < peripherals.length; index++) {
-      if (used[index] || peripherals[index].address) continue
-      if (!namesMatch(peripherals[index].name, entry.name)) continue
-      if (peripherals[index].percentage !== entry.percentage) continue
-      hits.push(index)
-    }
-    if (hits.length !== 1) return
-    var twin = peripherals[hits[0]]
-    if (connectedNamed(twin.name) !== 1) return
-    if (!entry.charge && twin.charge) entry.charge = twin.charge
-    used[hits[0]] = true
   }
 
   for (var c = 0; c < connected.length; c++) {
     var device = connected[c]
     var label = deviceLabel(device)
-    var byAddress = findByAddress(device.address)
-    var matchIndex = byAddress >= 0 ? byAddress : findByName(device)
+    var matchIndex = findByAddress(device.address)
     if (matchIndex >= 0) {
       var match = peripherals[matchIndex]
       used[matchIndex] = true
@@ -368,7 +314,7 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
         charge: match.charge,
         matched: true
       }
-      if (byAddress >= 0) absorbNamelessTwin(entry)
+      absorbIdentityTwin(entry)
       entries.push(entry)
       continue
     }
