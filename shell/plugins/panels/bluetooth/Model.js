@@ -114,14 +114,57 @@ var PERIPHERAL_TYPES = {
   28: true // bluetooth generic
 }
 
-// BlueZ object paths look like /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF. HID power
-// supplies sometimes embed the same address with colons or dashes.
+function isHexChar(ch) {
+  var code = ch.charCodeAt(0)
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 102) || (code >= 65 && code <= 70)
+}
+
+// Six octets starting at `start`, separated by one character. UPower writes a
+// HID address as hid-04:4b:ed:eb:f5:10-battery, underscores the same pairs in
+// a BlueZ object path, and turns each colon into "o" when it builds a D-Bus
+// object path (04:4b becomes 04o4b) because ":" is not legal in a path.
+function macAt(text, start, separator) {
+  var parts = ""
+  var index = start
+  for (var n = 0; n < 6; n++) {
+    if (index + 1 >= text.length) return ""
+    var a = text.charAt(index)
+    var b = text.charAt(index + 1)
+    if (!isHexChar(a) || !isHexChar(b)) return ""
+    parts += a.toLowerCase() + b.toLowerCase()
+    index += 2
+    if (n < 5) {
+      if (text.charAt(index) !== separator) return ""
+      index += 1
+    }
+  }
+  return parts
+}
+
+function boundedMac(text, separator) {
+  // 12 hex digits and 5 separators.
+  for (var i = 0; i + 16 < text.length; i++) {
+    if (i > 0 && isHexChar(text.charAt(i - 1))) continue
+    var address = macAt(text, i, separator)
+    if (!address) continue
+    var end = i + 17
+    if (end < text.length && isHexChar(text.charAt(end))) continue
+    return address
+  }
+  return ""
+}
+
+// BlueZ object paths look like /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF. A kernel
+// HID supply embeds the same address with colons, dashes, or underscores, and
+// the address comparison is case-insensitive either way.
 function upowerAddress(nativePath) {
   var text = String(nativePath || "")
-  var underscored = text.match(/dev_([0-9a-f]{2}(?:_[0-9a-f]{2}){5})/i)
-  if (underscored) return underscored[1].toLowerCase().replace(/_/g, "")
-  var separated = text.match(/([0-9a-f]{2}(?::[0-9a-f]{2}){5})/i) || text.match(/([0-9a-f]{2}(?:-[0-9a-f]{2}){5})/i)
-  return separated ? normalizedAddress(separated[1]) : ""
+  var separators = [":", "-", "_", "o"]
+  for (var s = 0; s < separators.length; s++) {
+    var found = boundedMac(text, separators[s])
+    if (found) return found
+  }
+  return ""
 }
 
 function chargeKind(state) {
@@ -157,18 +200,42 @@ function hasReading(device) {
 
 function peripheralFrom(device) {
   var percentage = percentageOf(device.percentage)
+  var nativePath = String(device.nativePath || "")
+  var serial = String(device.serial || "")
   return {
     name: String(device.model || "").trim(),
-    address: upowerAddress(device.nativePath),
+    address: upowerAddress(nativePath) || upowerAddress(serial),
+    nativePath: nativePath,
+    serial: serial,
     percentage: percentage,
     charge: chargeKind(device.state)
   }
 }
 
+// Exact, case-insensitive. Also "Magic Trackpad" inside "Apple Inc. Magic
+// Trackpad": the shorter side has to be more than one word, so a bare
+// "Trackpad" does not claim every trackpad UPower can see.
 function namesMatch(left, right) {
   var a = String(left || "").trim().toLowerCase()
   var b = String(right || "").trim().toLowerCase()
-  return a !== "" && a === b
+  if (a === "" || b === "") return false
+  if (a === b) return true
+  var shorter = a.length <= b.length ? a : b
+  var longer = a.length <= b.length ? b : a
+  if (shorter.indexOf(" ") === -1) return false
+  return longer.length > shorter.length && longer.slice(-(shorter.length + 1)) === " " + shorter
+}
+
+function deviceNames(device) {
+  var names = []
+  function add(value) {
+    var text = String(value || "").trim()
+    if (text && names.indexOf(text) === -1) names.push(text)
+  }
+  add(deviceLabel(device))
+  add(device && device.name)
+  add(device && device.deviceName)
+  return names
 }
 
 // One UPower object per Bluetooth address. HID and BlueZ can both publish the
@@ -212,21 +279,35 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
   var entries = []
   var connected = deviceLists(bluetoothDevices).connected
 
+  // Address equality first. Failing that, the 12 hex digits of the BlueZ
+  // address anywhere in the native path or serial — colons and dashes
+  // disappear once non-hex characters are stripped, and an uppercase BlueZ
+  // address compares the same as the lowercase hid- path.
   function findByAddress(address) {
     var want = normalizedAddress(address)
-    if (!want) return -1
+    if (want.length !== 12) return -1
+    var loose = -1
     for (var index = 0; index < peripherals.length; index++) {
       if (used[index]) continue
-      if (peripherals[index].address && peripherals[index].address === want) return index
+      var peripheral = peripherals[index]
+      if (peripheral.address === want) return index
+      if (loose !== -1) continue
+      var folded = normalizedAddress(String(peripheral.nativePath || "") + String(peripheral.serial || ""))
+      if (folded.indexOf(want) !== -1) loose = index
     }
-    return -1
+    return loose
   }
 
-  function findByName(label) {
+  function findByName(device) {
+    var labels = deviceNames(device)
     var found = -1
     for (var index = 0; index < peripherals.length; index++) {
       if (used[index] || peripherals[index].address) continue
-      if (!namesMatch(peripherals[index].name, label)) continue
+      var hit = false
+      for (var n = 0; n < labels.length; n++) {
+        if (namesMatch(peripherals[index].name, labels[n])) hit = true
+      }
+      if (!hit) continue
       if (found !== -1) return -1
       found = index
     }
@@ -250,7 +331,7 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
     var device = connected[c]
     var label = deviceLabel(device)
     var byAddress = findByAddress(device.address)
-    var matchIndex = byAddress >= 0 ? byAddress : findByName(label)
+    var matchIndex = byAddress >= 0 ? byAddress : findByName(device)
     if (matchIndex >= 0) {
       var match = peripherals[matchIndex]
       used[matchIndex] = true
@@ -325,12 +406,11 @@ function fillTemplate(template, args) {
   return text
 }
 
+// Only a device that is charging gets a state word. Discharging, full, and
+// empty stay a bare percentage — "39%" rather than "39% · Discharging".
 function chargeLabel(charge, tr) {
   var t = typeof tr === "function" ? tr : function(key, english) { return english }
   if (charge === "charging") return t("power.charging", "Charging")
-  if (charge === "discharging") return t("power.discharging", "Discharging")
-  if (charge === "full") return t("power.fullyCharged", "Fully charged")
-  if (charge === "empty") return t("bluetooth.batteryEmpty", "Empty")
   return ""
 }
 

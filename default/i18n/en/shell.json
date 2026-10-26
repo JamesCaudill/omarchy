@@ -143,7 +143,6 @@
   "bar.stopRecording": "Stop recording",
   "bluetooth.available": "AVAILABLE",
   "bluetooth.batteries": "BATTERIES",
-  "bluetooth.batteryEmpty": "Empty",
   "bluetooth.batteryLine": "%1 %2%",
   "bluetooth.batteryLineWithState": "%1 %2% · %3",
   "bluetooth.batteryStatus": "%1%",

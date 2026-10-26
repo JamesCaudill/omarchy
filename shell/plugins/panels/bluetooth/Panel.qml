@@ -985,9 +985,12 @@ Panel {
     readonly property string action: root.pendingAction(dev ? dev.address : "")
     readonly property string actionTooltip: {
       if (!dev) return ""
-      if (isConnected) return Commons.I18n.t("bluetooth.disconnect")
-      if (isDiscovered) return Commons.I18n.t("bluetooth.pair")
-      return Commons.I18n.t("bluetooth.connect")
+      var action = isConnected ? Commons.I18n.t("bluetooth.disconnect")
+        : isDiscovered ? Commons.I18n.t("bluetooth.pair")
+        : Commons.I18n.t("bluetooth.connect")
+      if (dev.percentage === null || dev.percentage === undefined) return action
+      var battery = Model.formatBatteryStatus(dev, Commons.I18n.t, Commons.I18n.formatNumber)
+      return battery ? battery + "\n" + action : action
     }
 
     readonly property bool rowSelected: root.cursorActive && root.focusSection === sectionName && root.selectedIndex === rowIndex
