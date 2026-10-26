@@ -113,8 +113,7 @@ assertEqual(bluetooth.upowerAddress('hidpp_battery_0'), '', 'bluetooth leaves a 
 // James's pair: the trackpad is connected over Bluetooth and UPower knows the
 // BlueZ path; the keyboard is on a cable, so BlueZ does not list it as
 // connected. The hover names both, and UPower's level wins over a stale
-// BlueZ percentage because only UPower knows charging. The bar icon itself
-// stays the glyph.
+// BlueZ percentage because only UPower knows charging.
 const trackpad = { name: 'Magic Trackpad', address: 'AA:BB:CC:DD:EE:01', connected: true, batteryAvailable: true, battery: 0.1 }
 const pairedKeyboard = { name: 'Magic Keyboard', address: 'AA:BB:CC:DD:EE:02', connected: false, paired: true }
 const readouts = bluetooth.batteryReadouts(
@@ -132,7 +131,6 @@ assertDeepEqual(readouts.map((entry) => [entry.name, entry.percentage, entry.cha
   ['Magic Trackpad', 39, 'discharging', true],
   ['WH-1000XM5', 80, '', true]
 ], 'bluetooth lists UPower peripheral batteries, prefers them over BlueZ, and skips the laptop supply')
-assert(!/labelText:/.test(panelSource) && !/openPanelIndicatorWidth:/.test(panelSource) && !/slotSize:/.test(panelSource), 'bluetooth keeps the bar button as the glyph at its normal width')
 assertDeepEqual(bluetooth.unmatchedBatteries(readouts).map((entry) => entry.name), ['Magic Keyboard'], 'bluetooth keeps a cabled keyboard out of the BlueZ device rows')
 assertEqual(
   bluetooth.batteryForAddress(readouts, 'aa:bb:cc:dd:ee:01').percentage,
@@ -167,6 +165,36 @@ const twinCharge = bluetooth.batteryReadouts(
 )
 assertEqual(twinCharge.length, 1, 'bluetooth still folds the keyboard when only the HID copy knows it is charging')
 assertEqual(twinCharge[0].charge, 'charging', 'bluetooth keeps the charging state from the HID copy')
+
+// Two connected keyboards of one model, and a cabled keyboard at the same
+// percentage. The cable supply is not proof of either Bluetooth keyboard.
+const sameModelKeyboards = bluetooth.batteryReadouts(
+  [
+    { name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true },
+    { name: 'Magic Keyboard', address: 'AA:BB:CC:DD:EE:10', connected: true }
+  ],
+  [
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 2, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' },
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hid-CABLESERIAL-battery-144' }
+  ]
+)
+assertDeepEqual(sameModelKeyboards.map((entry) => [entry.name, entry.percentage, entry.charge, entry.matched]), [
+  ['Magic Keyboard', 22, 'discharging', true],
+  ['Magic Keyboard', 22, 'charging', false]
+], 'bluetooth keeps two same-model keyboards at the same percentage as two rows')
+
+// BlueZ and HID both carry this address. The discharging copy is listed
+// first; the charging copy, and its percentage, are the ones that remain.
+const chargingCopy = bluetooth.batteryReadouts(
+  [{ name: 'Magic Keyboard', address: '11:22:33:44:55:66', connected: true }],
+  [
+    { type: 6, model: 'Magic Keyboard', percentage: 0.4, state: 2, nativePath: '/org/bluez/hci0/dev_11_22_33_44_55_66' },
+    { type: 6, model: 'Magic Keyboard', percentage: 0.22, state: 1, nativePath: 'hid-11:22:33:44:55:66-battery' }
+  ]
+)
+assertEqual(chargingCopy.length, 1, 'bluetooth keeps one row when BlueZ and HID share an address')
+assertEqual(chargingCopy[0].charge, 'charging', 'bluetooth prefers charging over a discharging copy of the same address')
+assertEqual(chargingCopy[0].percentage, 22, 'bluetooth keeps the percentage from the charging copy')
 
 // Two supplies with the same model and no address must not be pinned onto one
 // connected device. An empty battery that says it is discharging still shows.

@@ -239,7 +239,8 @@ function deviceNames(device) {
 }
 
 // One UPower object per Bluetooth address. HID and BlueZ can both publish the
-// same device; keep the one that knows whether it is charging.
+// same device. Charging is the copy worth showing, and its percentage comes
+// with it. Otherwise a copy that knows its state wins over an unknown one.
 function dedupePeripherals(list) {
   var byAddress = {}
   var result = []
@@ -255,7 +256,9 @@ function dedupePeripherals(list) {
       result.push(item)
       continue
     }
-    if (!result[previous].charge && item.charge) result[previous] = item
+    var kept = result[previous]
+    if (item.charge === "charging" && kept.charge !== "charging") result[previous] = item
+    else if (!kept.charge && item.charge) result[previous] = item
   }
   return result
 }
@@ -298,6 +301,21 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
     return loose
   }
 
+  // Connected devices whose label is this supply's name. An address-less
+  // supply is only theirs when exactly one of them could own it.
+  function connectedNamed(name) {
+    var count = 0
+    for (var i = 0; i < connected.length; i++) {
+      var labels = deviceNames(connected[i])
+      for (var n = 0; n < labels.length; n++) {
+        if (!namesMatch(name, labels[n])) continue
+        count++
+        break
+      }
+    }
+    return count
+  }
+
   function findByName(device) {
     var labels = deviceNames(device)
     var found = -1
@@ -311,20 +329,28 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
       if (found !== -1) return -1
       found = index
     }
+    if (found < 0 || connectedNamed(peripherals[found].name) !== 1) return -1
     return found
   }
 
   // A keyboard UPower publishes twice — once from BlueZ, once from HID with
-  // no address — is one device. Fold the address-less twin when the level
-  // agrees, and keep its charging state if that is the copy that has one.
+  // no address — can be one device. Fold that twin only when it is the only
+  // address-less supply of this name at this level and the only connected
+  // device of this name. A second keyboard of the same model stays its own
+  // read-only row, and does not lend its charging state to the other one.
   function absorbNamelessTwin(entry) {
+    var hits = []
     for (var index = 0; index < peripherals.length; index++) {
       if (used[index] || peripherals[index].address) continue
       if (!namesMatch(peripherals[index].name, entry.name)) continue
       if (peripherals[index].percentage !== entry.percentage) continue
-      if (!entry.charge && peripherals[index].charge) entry.charge = peripherals[index].charge
-      used[index] = true
+      hits.push(index)
     }
+    if (hits.length !== 1) return
+    var twin = peripherals[hits[0]]
+    if (connectedNamed(twin.name) !== 1) return
+    if (!entry.charge && twin.charge) entry.charge = twin.charge
+    used[hits[0]] = true
   }
 
   for (var c = 0; c < connected.length; c++) {
