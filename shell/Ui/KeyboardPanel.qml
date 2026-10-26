@@ -438,10 +438,12 @@ PanelWindow {
       if (heldTarget) heldTarget.heldButtons = button
     }
 
+    // Every button still down, so a second button pressed or let go mid-hold
+    // leaves the first one's feedback alone.
     onPressed: function(mouse) {
-      hold(root.focusPrimed && inBarRegion(mouse.x, mouse.y) ? pressTargetAt(mouse.x, mouse.y) : null, mouse.button)
+      hold(root.focusPrimed && inBarRegion(mouse.x, mouse.y) ? pressTargetAt(mouse.x, mouse.y) : null, mouse.buttons)
     }
-    onReleased: hold(null)
+    onReleased: function(mouse) { hold(mouse.buttons ? heldTarget : null, mouse.buttons) }
     onCanceled: hold(null)
     onEnabledChanged: if (!enabled) hold(null)
 
