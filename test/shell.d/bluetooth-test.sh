@@ -112,8 +112,9 @@ assertEqual(bluetooth.upowerAddress('hidpp_battery_0'), '', 'bluetooth leaves a 
 
 // James's pair: the trackpad is connected over Bluetooth and UPower knows the
 // BlueZ path; the keyboard is on a cable, so BlueZ does not list it as
-// connected. The icon has to show both, and UPower's level wins over a stale
-// BlueZ percentage because only UPower knows charging.
+// connected. The hover names both, and UPower's level wins over a stale
+// BlueZ percentage because only UPower knows charging. The bar icon itself
+// stays the glyph.
 const trackpad = { name: 'Magic Trackpad', address: 'AA:BB:CC:DD:EE:01', connected: true, batteryAvailable: true, battery: 0.1 }
 const pairedKeyboard = { name: 'Magic Keyboard', address: 'AA:BB:CC:DD:EE:02', connected: false, paired: true }
 const readouts = bluetooth.batteryReadouts(
@@ -131,7 +132,7 @@ assertDeepEqual(readouts.map((entry) => [entry.name, entry.percentage, entry.cha
   ['Magic Trackpad', 39, 'discharging', true],
   ['WH-1000XM5', 80, '', true]
 ], 'bluetooth lists UPower peripheral batteries, prefers them over BlueZ, and skips the laptop supply')
-assertDeepEqual(bluetooth.headlineBattery(readouts), readouts[0], 'bluetooth headlines the lowest peripheral battery')
+assert(!/labelText:/.test(panelSource) && !/openPanelIndicatorWidth:/.test(panelSource) && !/slotSize:/.test(panelSource), 'bluetooth keeps the bar button as the glyph at its normal width')
 assertDeepEqual(bluetooth.unmatchedBatteries(readouts).map((entry) => entry.name), ['Magic Keyboard'], 'bluetooth keeps a cabled keyboard out of the BlueZ device rows')
 assertEqual(
   bluetooth.batteryForAddress(readouts, 'aa:bb:cc:dd:ee:01').percentage,
@@ -209,7 +210,7 @@ assertEqual(
 // HID supply (lowercase address, report id 144). BlueZ spells the same address
 // in uppercase and the alias uses a curly apostrophe, so it is not the UPower
 // model name. The keyboard's native path is a serial, not an address, and it
-// stays its own row. The icon already showed 39%; the trackpad row has to as well.
+// stays its own row. The trackpad's own row shows 39%, with no discharging word.
 const jamesTrackpad = {
   name: 'James Caudill\u2019s Trackpad',
   address: '04:4B:ED:EB:F5:10',

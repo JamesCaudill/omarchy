@@ -83,7 +83,7 @@ function sortedByLabel(devices) {
 // UPower D-Bus Device.Type / Device.State. Quickshell exposes the same numbers.
 // Peripheral types are the ones a person charges beside the laptop: keyboards,
 // mice, trackpads, headsets. The laptop battery and the line-power supply are
-// not in this set, so they never land on the Bluetooth icon.
+// not in this set, so they never show up as a Bluetooth battery.
 var UPOWER_STATE = {
   unknown: 0,
   charging: 1,
@@ -376,10 +376,6 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
   return entries
 }
 
-function headlineBattery(entries) {
-  return entries && entries.length ? entries[0] : null
-}
-
 function unmatchedBatteries(entries) {
   var list = []
   for (var i = 0; i < (entries || []).length; i++) {
@@ -539,7 +535,6 @@ if (typeof module !== "undefined") {
     deviceLists: deviceLists,
     upowerAddress: upowerAddress,
     batteryReadouts: batteryReadouts,
-    headlineBattery: headlineBattery,
     unmatchedBatteries: unmatchedBatteries,
     batteryForAddress: batteryForAddress,
     formatBatteryStatus: formatBatteryStatus,

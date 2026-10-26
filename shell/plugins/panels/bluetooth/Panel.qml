@@ -39,10 +39,6 @@ Panel {
   readonly property var upowerDevices: UPower.devices ? UPower.devices.values : []
   readonly property var batteryEntries: Model.batteryReadouts(devices, upowerDevices)
   readonly property var unmatchedBatteries: Model.unmatchedBatteries(batteryEntries)
-  readonly property string batteryLabel: {
-    var headline = Model.headlineBattery(batteryEntries)
-    return headline ? Commons.I18n.formatNumber(headline.percentage) + "%" : ""
-  }
   readonly property string batteryTooltip: Model.formatBatteryTooltip(batteryEntries, Commons.I18n.t, Commons.I18n.formatNumber)
   readonly property var pipewireNodes: Pipewire.nodes ? Pipewire.nodes.values : []
   property var pendingAudioOutputDevice: null
@@ -75,11 +71,6 @@ Panel {
     if (connectedDevices.length > 0) return "󰂱"
     return "󰂯"
   }
-
-  // The percentage widens the button the same way the power widget does, so
-  // the open-panel mark stays the glyph's width instead of a fraction of the
-  // wider slot.
-  readonly property real openPanelIndicatorWidth: batteryLabel !== "" && !(bar && bar.vertical) ? button.glyphPaintedWidth : 0
 
   property int phraseIndex: 0
   readonly property var activePhrases: [
@@ -675,8 +666,6 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.icon
-    labelText: root.bar && root.bar.vertical ? "" : root.batteryLabel
-    slotSize: Style.bar.iconSlot * (labelText !== "" ? 2 : 1)
     tooltipText: root.batteryTooltip
     onPressed: function(b) {
       if (b === Qt.RightButton) root.toggleBluetooth()
