@@ -226,6 +226,18 @@ function namesMatch(left, right) {
   return longer.length > shorter.length && longer.slice(-(shorter.length + 1)) === " " + shorter
 }
 
+// Last word, when it is a kind of device. "James Caudill’s Keyboard" and
+// "Apple Inc. Magic Keyboard" share one, and a HID supply named only by its
+// serial has no address to match on. Two supplies of that kind stay unmatched.
+var PRODUCT_TOKENS = { keyboard: true, trackpad: true, mouse: true }
+
+function productToken(name) {
+  var parts = String(name || "").trim().toLowerCase().split(/\s+/)
+  if (parts.length < 2) return ""
+  var last = parts[parts.length - 1].replace(/[^a-z]/g, "")
+  return PRODUCT_TOKENS[last] ? last : ""
+}
+
 function deviceNames(device) {
   var names = []
   function add(value) {
@@ -298,20 +310,40 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
     return loose
   }
 
-  function findByName(device) {
-    var labels = deviceNames(device)
+  // -2 is ambiguous: more than one unused address-less supply hit. Callers
+  // treat that as no match rather than guessing a battery.
+  function findUnused(match) {
     var found = -1
     for (var index = 0; index < peripherals.length; index++) {
       if (used[index] || peripherals[index].address) continue
-      var hit = false
-      for (var n = 0; n < labels.length; n++) {
-        if (namesMatch(peripherals[index].name, labels[n])) hit = true
-      }
-      if (!hit) continue
-      if (found !== -1) return -1
+      if (!match(peripherals[index])) continue
+      if (found !== -1) return -2
       found = index
     }
     return found
+  }
+
+  function findByName(device) {
+    var labels = deviceNames(device)
+    var byName = findUnused(function(peripheral) {
+      for (var n = 0; n < labels.length; n++) {
+        if (namesMatch(peripheral.name, labels[n])) return true
+      }
+      return false
+    })
+    if (byName !== -1) return byName < 0 ? -1 : byName
+
+    var tokens = []
+    for (var t = 0; t < labels.length; t++) {
+      var token = productToken(labels[t])
+      if (token && tokens.indexOf(token) === -1) tokens.push(token)
+    }
+    if (!tokens.length) return -1
+    var byToken = findUnused(function(peripheral) {
+      var token = productToken(peripheral.name)
+      return token !== "" && tokens.indexOf(token) !== -1
+    })
+    return byToken < 0 ? -1 : byToken
   }
 
   // A keyboard UPower publishes twice — once from BlueZ, once from HID with
@@ -440,7 +472,7 @@ function deviceRow(d, battery) {
   var fromBattery = !!(battery && battery.percentage !== undefined && battery.percentage !== null)
   var reported = fromBattery ? Math.round(Number(battery.percentage)) : (d.batteryAvailable ? Math.round(Number(d.battery) * 100) : null)
   if (reported !== null && (!isFinite(reported) || reported < 0 || reported > 100)) reported = null
-  return {
+  var row = {
     address: d.address || "",
     name: d.name || "",
     deviceName: d.deviceName || "",
@@ -450,8 +482,11 @@ function deviceRow(d, battery) {
     battery: reported !== null ? reported / 100 : 0,
     percentage: reported,
     charge: fromBattery && reported !== null && battery.charge ? battery.charge : "",
+    batteryText: "",
     pairing: !!d.pairing
   }
+  row.batteryText = reported !== null ? formatBatteryStatus(row) : ""
+  return row
 }
 
 function deviceLists(devices) {

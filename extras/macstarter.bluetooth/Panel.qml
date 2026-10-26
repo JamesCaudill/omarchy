@@ -37,14 +37,7 @@ Panel {
   readonly property var upowerDevices: UPower.devices ? UPower.devices.values : []
   readonly property var batteryEntries: Model.batteryReadouts(devices, upowerDevices)
   readonly property var unmatchedBatteries: Model.unmatchedBatteries(batteryEntries)
-  readonly property string batteryLabel: {
-    var headline = Model.headlineBattery(batteryEntries)
-    return headline ? headline.percentage + "%" : ""
-  }
   readonly property string batteryTooltip: Model.formatBatteryTooltip(batteryEntries)
-  // The percentage widens the button the same way the 4.0.6 power widget does,
-  // so the open-panel mark stays the glyph's width instead of the wider slot.
-  readonly property real openPanelIndicatorWidth: batteryLabel !== "" && !button.vertical ? button.glyphPaintedWidth : 0
   readonly property var pipewireNodes: Pipewire.nodes ? Pipewire.nodes.values : []
   property var pendingAudioOutputDevice: null
   property int pendingAudioOutputAttempts: 0
@@ -670,10 +663,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    // 4.0.6 BarIconButton has no labelText. The power widget puts the
-    // percentage in the glyph string, to the left of the icon.
-    text: root.batteryLabel !== "" && !button.vertical ? root.batteryLabel + " " + root.icon : root.icon
-    slotSize: Style.bar.iconSlot * (root.batteryLabel !== "" && !button.vertical ? 2 : 1)
+    text: root.icon
     tooltipText: root.batteryTooltip
     onPressed: function(b) {
       if (b === Qt.RightButton) root.toggleBluetooth()
@@ -892,13 +882,11 @@ Panel {
 
               PanelSeparator {
                 visible: index > 0 && sectionTitle !== ""
-                height: visible ? implicitHeight : 0
                 foreground: root.bar.foreground
               }
 
               PanelSectionHeader {
                 visible: sectionTitle !== ""
-                height: visible ? implicitHeight : 0
                 text: sectionTitle
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
@@ -936,7 +924,10 @@ Panel {
   component BatteryLine: Item {
     id: line
     required property var entry
+    // Height, not only implicitHeight: a Column lays out an Item's height, and
+    // a zero height hides the cable keyboard under the BATTERIES header.
     implicitHeight: Math.max(nameText.implicitHeight, statusText.implicitHeight)
+    height: implicitHeight
 
     Text {
       id: nameText
@@ -945,7 +936,7 @@ Panel {
       anchors.leftMargin: Style.space(10)
       anchors.right: statusText.left
       anchors.rightMargin: Style.space(8)
-      anchors.verticalCenter: parent.verticalCenter
+      anchors.top: parent.top
       text: line.entry && line.entry.name ? line.entry.name : "Device"
       color: root.bar.foreground
       font.family: root.bar.fontFamily
@@ -958,7 +949,7 @@ Panel {
       textFormat: Text.PlainText
       anchors.right: parent.right
       anchors.rightMargin: Style.space(10)
-      anchors.verticalCenter: parent.verticalCenter
+      anchors.top: parent.top
       text: Model.formatBatteryStatus(line.entry)
       color: root.bar.foreground
       font.family: root.bar.fontFamily
@@ -978,12 +969,18 @@ Panel {
     readonly property bool isConnected: dev && dev.connected
     readonly property int devState: dev && dev.state !== undefined ? dev.state : -1
     readonly property string action: root.pendingAction(dev ? dev.address : "")
+    // A string, computed before the row crosses into the delegate. The charge
+    // sits on the name line; the tooltip repeats it above Disconnect/Connect.
+    readonly property string batteryText: {
+      if (!dev) return ""
+      if (dev.batteryText) return String(dev.batteryText)
+      if (dev.percentage === null || dev.percentage === undefined) return ""
+      return Model.formatBatteryStatus(dev)
+    }
     readonly property string actionTooltip: {
       if (!dev) return ""
       var action = isConnected ? "Disconnect" : isDiscovered ? "Pair" : "Connect"
-      if (dev.percentage === null || dev.percentage === undefined) return action
-      var battery = Model.formatBatteryStatus(dev)
-      return battery ? battery + "\n" + action : action
+      return batteryText !== "" ? batteryText + "\n" + action : action
     }
 
     readonly property bool rowSelected: root.cursorActive && root.focusSection === sectionName && root.selectedIndex === rowIndex
@@ -1000,10 +997,7 @@ Panel {
       if (!dev) return ""
       if (action === "forgetting") return "Forgetting…"
       if (action === "disconnecting" || devState === 2) return "Disconnecting…"
-      if (isConnected) {
-        if (dev.percentage !== null && dev.percentage !== undefined) return Model.formatBatteryStatus(dev)
-        return sectionName === "connected" ? "" : "Connected"
-      }
+      if (isConnected) return ""
       if (action === "connecting" || devState === 3 || dev.pairing === true) return "Connecting…"
       if (isDiscovered) return ""
       return ""
@@ -1016,6 +1010,7 @@ Panel {
     }
 
     implicitHeight: rowContent.implicitHeight + Style.spacing.rowPaddingX
+    height: implicitHeight
 
     MouseArea {
       id: rowMouse
@@ -1057,7 +1052,8 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
-      implicitHeight: Math.max(deviceIcon.implicitHeight, info.implicitHeight, forgetBtn.implicitHeight)
+      implicitHeight: Math.max(deviceIcon.implicitHeight, info.implicitHeight, chargeText.implicitHeight, forgetBtn.implicitHeight)
+      height: implicitHeight
 
       Text {
         id: deviceIcon
@@ -1075,8 +1071,8 @@ Panel {
         spacing: Style.space(1)
         anchors.left: deviceIcon.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: forgetBtn.visible ? forgetBtn.left : parent.right
-        anchors.rightMargin: forgetBtn.visible ? Style.space(8) : 0
+        anchors.right: chargeText.visible ? chargeText.left : (forgetBtn.visible ? forgetBtn.left : parent.right)
+        anchors.rightMargin: chargeText.visible || forgetBtn.visible ? Style.space(8) : 0
         anchors.verticalCenter: parent.verticalCenter
 
         Text {
@@ -1098,6 +1094,19 @@ Panel {
           elide: Text.ElideRight
           width: parent.width
         }
+      }
+
+      Text {
+        id: chargeText
+        visible: row.batteryText !== ""
+        textFormat: Text.PlainText
+        text: row.batteryText
+        color: root.bar.foreground
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.body
+        anchors.right: forgetBtn.visible ? forgetBtn.left : parent.right
+        anchors.rightMargin: forgetBtn.visible ? Style.space(8) : 0
+        anchors.verticalCenter: parent.verticalCenter
       }
 
       PanelActionButton {
