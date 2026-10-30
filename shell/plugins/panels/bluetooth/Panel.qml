@@ -34,8 +34,9 @@ Panel {
   readonly property var devices: Bluetooth.devices ? Bluetooth.devices.values : []
   // UPower already has the batteries BlueZ's Battery1 interface often lacks:
   // a keyboard on a cable (HID), and a Bluetooth device whose level never
-  // reaches BlueZ unless bluetoothd was started with Experimental. Battery1
-  // remains the fallback inside batteryReadouts for anything UPower misses.
+  // reaches BlueZ unless bluetoothd was started with Experimental. Readings
+  // without an address in their native path stay separate; Battery1 remains
+  // the fallback when no UPower reading can be matched.
   readonly property var upowerDevices: UPower.devices ? UPower.devices.values : []
   readonly property var batteryEntries: Model.batteryReadouts(devices, upowerDevices)
   readonly property var unmatchedBatteries: Model.unmatchedBatteries(batteryEntries)
@@ -783,9 +784,9 @@ Panel {
           foreground: root.bar.foreground
         }
 
-        // A keyboard on a cable never appears in the BlueZ device list, but
-        // UPower still has its battery. These rows are read-only: there is
-        // nothing to connect or forget.
+        // UPower batteries that cannot be matched to a connected device,
+        // including cabled keyboards and HID++ supplies without an address.
+        // These rows are read-only: no BlueZ device is identified for actions.
         Column {
           id: batteryList
           visible: root.unmatchedBatteries.length > 0
@@ -925,8 +926,7 @@ Panel {
     }
   }
 
-  // Read-only battery for a peripheral UPower sees and BlueZ does not, such
-  // as a keyboard plugged in over USB.
+  // Read-only battery that cannot be matched to a connected BlueZ device.
   component BatteryLine: Item {
     id: line
     required property var entry

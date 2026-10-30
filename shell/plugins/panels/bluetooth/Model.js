@@ -201,12 +201,10 @@ function hasReading(device) {
 function peripheralFrom(device) {
   var percentage = percentageOf(device.percentage)
   var nativePath = String(device.nativePath || "")
-  var serial = String(device.serial || "")
   return {
     name: String(device.model || "").trim(),
-    address: upowerAddress(nativePath) || upowerAddress(serial),
+    address: upowerAddress(nativePath),
     nativePath: nativePath,
-    serial: serial,
     percentage: percentage,
     charge: chargeKind(device.state)
   }
@@ -238,9 +236,10 @@ function dedupePeripherals(list) {
 }
 
 // Connected Bluetooth devices first, enriched from UPower only when the
-// supply's native path or serial contains that device's address. A keyboard
-// on a cable has a USB serial there instead, so it stays an unmatched row.
-// BlueZ Battery1 is the fallback for a device UPower has never seen; that
+// supply's native path contains that device's address. Quickshell does not
+// expose UPower's Serial, so supplies without an address (including HID++)
+// stay unmatched rather than being guessed onto a connected device.
+// BlueZ Battery1 is the fallback when no UPower reading can be matched; that
 // interface is empty unless bluetoothd was started with Experimental.
 function batteryReadouts(bluetoothDevices, upowerDevices) {
   var peripherals = []
@@ -255,49 +254,13 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
   var entries = []
   var connected = deviceLists(bluetoothDevices).connected
 
-  // Address equality first. Failing that, the 12 hex digits of the BlueZ
-  // address anywhere in the native path or serial — colons and dashes
-  // disappear once non-hex characters are stripped, and an uppercase BlueZ
-  // address compares the same as the lowercase hid- path.
   function findByAddress(address) {
     var want = normalizedAddress(address)
     if (want.length !== 12) return -1
-    var loose = -1
     for (var index = 0; index < peripherals.length; index++) {
-      if (used[index]) continue
-      var peripheral = peripherals[index]
-      if (peripheral.address === want) return index
-      if (loose !== -1) continue
-      var folded = normalizedAddress(String(peripheral.nativePath || "") + String(peripheral.serial || ""))
-      if (folded.indexOf(want) !== -1) loose = index
+      if (!used[index] && peripherals[index].address === want) return index
     }
-    return loose
-  }
-
-  // A second UPower object for this same radio. The kernel puts the
-  // Bluetooth address in the HID supply name; a cabled keyboard puts its
-  // USB serial there instead, which does not contain that address.
-  function carriesAddress(peripheral, want) {
-    if (!want) return false
-    var folded = normalizedAddress(String(peripheral.nativePath || "") + String(peripheral.serial || ""))
-    return folded.indexOf(want) !== -1
-  }
-
-  function absorbIdentityTwin(entry) {
-    var want = entry.address
-    if (!want || want.length !== 12) return
-    for (var index = 0; index < peripherals.length; index++) {
-      if (used[index] || !carriesAddress(peripherals[index], want)) continue
-      var twin = peripherals[index]
-      if (twin.charge === "charging" && entry.charge !== "charging") {
-        entry.charge = twin.charge
-        entry.percentage = twin.percentage
-      } else if (!entry.charge && twin.charge) {
-        entry.charge = twin.charge
-        entry.percentage = twin.percentage
-      }
-      used[index] = true
-    }
+    return -1
   }
 
   for (var c = 0; c < connected.length; c++) {
@@ -314,7 +277,6 @@ function batteryReadouts(bluetoothDevices, upowerDevices) {
         charge: match.charge,
         matched: true
       }
-      absorbIdentityTwin(entry)
       entries.push(entry)
       continue
     }
